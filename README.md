@@ -23,12 +23,15 @@ data class Track(val id: String, val name: String, val artists: List<String>)
 class MusicDownloader(private val outputDir: File) {
     private val client = OkHttpClient()
     private val mapper = jacksonObjectMapper()
+    private var downloadedCount = 0
+    private var skippedCount = 0
+    private var failedCount = 0
 
     init {
         outputDir.mkdirs()
     }
 
-    private fun getSpotifyToken(clientId: String, clientSecret: String): String {
+    fun getSpotifyToken(clientId: String, clientSecret: String): String {
         val request = Request.Builder()
             .url("https://accounts.spotify.com/api/token")
             .post(
@@ -124,28 +127,61 @@ class MusicDownloader(private val outputDir: File) {
         tempFile.delete()
     }
 
-    fun downloadPlaylist(playlistUrl: String, clientId: String, clientSecret: String) {
+    private fun fileExists(track: Track): Boolean {
+        val safeName = "${track.artists.joinToString(", ")} - ${track.name}"
+            .replace(Regex("[/:*?\"<>|]"), "_")
+        val finalFile = File(outputDir, "$safeName.opus")
+        return finalFile.exists()
+    }
+
+    fun downloadPlaylist(playlistUrl: String, clientId: String, clientSecret: String, startFrom: Int = 1) {
         println("Starting download process...")
         val token = getSpotifyToken(clientId, clientSecret)
         val tracks = getPlaylistTracks(playlistUrl, token)
         println("Found ${tracks.size} tracks in playlist.")
 
-        tracks.forEachIndexed { index, track ->
+        val startIndex = (startFrom - 1).coerceAtLeast(0).coerceAtMost(tracks.size - 1)
+
+        tracks.drop(startIndex).forEachIndexed { index, track ->
+            val actualIndex = startIndex + index + 1
             val safeName = "${track.artists.joinToString(", ")} - ${track.name}"
                 .replace(Regex("[/:*?\"<>|]"), "_")
-            println("Processing track ${index + 1}/${tracks.size}: $safeName")
+            println("\nProcessing track $actualIndex/${tracks.size}: $safeName")
+
+            if (fileExists(track)) {
+                println("Skipping: '$safeName' already exists")
+                skippedCount++
+                return@forEachIndexed
+            }
 
             val youtubeUrl = getYoutubeAudioUrl(track)
             if (youtubeUrl != null) {
                 println("Downloading from: $youtubeUrl")
-                downloadAndConvert(youtubeUrl, safeName)
-                println("Finished downloading: $safeName")
+                try {
+                    downloadAndConvert(youtubeUrl, safeName)
+                    println("Finished downloading: $safeName")
+                    downloadedCount++
+                } catch (e: Exception) {
+                    println("Failed to download '$safeName': ${e.message}")
+                    failedCount++
+                }
             } else {
                 println("Could not find YouTube URL for: $safeName")
+                failedCount++
             }
         }
 
-        println("Download complete! Check folder: ${outputDir.absolutePath}")
+        printStats(tracks.size)
+    }
+
+    private fun printStats(totalTracks: Int) {
+        println("\n=== Download Statistics ===")
+        println("Total tracks in playlist: $totalTracks")
+        println("Successfully downloaded: $downloadedCount")
+        println("Skipped (already downloaded): $skippedCount")
+        println("Failed to download: $failedCount")
+        println("Output directory: ${outputDir.absolutePath}")
+        println("===========================")
     }
 }
 
@@ -156,7 +192,13 @@ fun main(args: Array<String>) {
     }
 
     val downloader = MusicDownloader(File(args[3]))
-    downloader.downloadPlaylist(args[0], args[1], args[2])
+    val token = downloader.getSpotifyToken(args[1], args[2])
+    val tracks = downloader.getPlaylistTracks(args[0], token)
+    println("Found ${tracks.size} tracks in playlist.")
+    println("Enter the track number to start from (1-${tracks.size}, default is 1): ")
+    val startFrom = readLine()?.toIntOrNull() ?: 1
+
+    downloader.downloadPlaylist(args[0], args[1], args[2], startFrom)
 }
 ```
 
