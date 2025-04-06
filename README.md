@@ -47,23 +47,38 @@ class MusicDownloader(private val outputDir: File) {
 
     fun getPlaylistTracks(playlistUrl: String, token: String): List<Track> {
         val playlistId = playlistUrl.split("/playlist/")[1].split("?")[0]
-        val request = Request.Builder()
-            .url("https://api.spotify.com/v1/playlists/$playlistId/tracks")
-            .addHeader("Authorization", "Bearer $token")
-            .build()
-
         val tracks = mutableListOf<Track>()
-        client.newCall(request).execute().use { response ->
-            val json = mapper.readValue<Map<String, Any>>(response.body?.string() ?: "{}")
-            val items = json["items"] as List<Map<String, Any>>
-            items.forEach { item ->
-                val track = item["track"] as Map<String, Any>
-                val id = track["id"] as String
-                val name = track["name"] as String
-                val artists = (track["artists"] as List<Map<String, Any>>).map { it["name"] as String }
-                tracks.add(Track(id, name, artists))
+        var offset = 0
+        val limit = 100
+        var total = 0
+
+        do {
+            val request = Request.Builder()
+                .url("https://api.spotify.com/v1/playlists/$playlistId/tracks?offset=$offset&limit=$limit")
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw Exception("Spotify API error: ${response.code} - ${response.message}")
+                }
+                val json = mapper.readValue<Map<String, Any>>(response.body?.string() ?: throw Exception("Empty response"))
+                val items = json["items"] as List<Map<String, Any>>
+                total = json["total"] as Int
+
+                items.forEach { item ->
+                    val track = item["track"] as Map<String, Any>
+                    val id = track["id"] as String
+                    val name = track["name"] as String
+                    val artists = (track["artists"] as List<Map<String, Any>>).map { it["name"] as String }
+                    tracks.add(Track(id, name, artists))
+                }
+
+                offset += limit
             }
-        }
+            Thread.sleep(500)
+        } while (offset < total)
+
         return tracks
     }
 
